@@ -7,7 +7,7 @@ from loguru import logger
 
 from app.config import config
 from app.models import const
-from app.models.schema import VideoConcatMode, VideoParams
+from app.models.schema import VideoConcatMode, VideoParams, VideoCropMode
 from app.services import llm, material, subtitle, video, voice
 from app.services import state as sm
 from app.utils import utils
@@ -218,6 +218,7 @@ def generate_final_videos(
             video_transition_mode=video_transition_mode,
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
+            crop_mode=params.crop_mode,
         )
 
         _progress += 50 / params.video_count / 2

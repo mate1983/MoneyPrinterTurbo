@@ -26,10 +26,59 @@ from app.models.schema import (
     VideoAspect,
     VideoConcatMode,
     VideoParams,
-    VideoTransitionMode,
+    VideoTransitionMode, VideoCropMode,
 )
 from app.services.utils import video_effects
 from app.utils import utils
+
+# 在 video.py 的开头添加
+import os
+import sys
+import subprocess
+import logging
+
+logger = logging.getLogger(__name__)
+
+# 强制设置FFMPEG_BINARY
+def setup_ffmpeg():
+    """配置FFmpeg路径"""
+    # 如果已设置，直接使用
+    if "FFMPEG_BINARY" in os.environ:
+        logger.info(f"使用已配置的FFMPEG_BINARY: {os.environ['FFMPEG_BINARY']}")
+        return
+
+    # 尝试找到可用的ffmpeg
+    candidates = [
+        '/usr/bin/ffmpeg',
+        '/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        'ffmpeg'
+    ]
+
+    for candidate in candidates:
+        try:
+            result = subprocess.run(
+                [candidate, '-version'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                os.environ["FFMPEG_BINARY"] = candidate
+                logger.info(f"✅ 设置FFMPEG_BINARY为: {candidate}")
+                logger.info(f"   FFmpeg版本: {result.stdout.split('\\n')[0]}")
+                return
+        except Exception as e:
+            logger.debug(f"候选路径 {candidate} 不可用: {e}")
+            continue
+
+    # 如果都没找到，使用默认
+    os.environ["FFMPEG_BINARY"] = "/usr/bin/ffmpeg"
+    logger.warning(f"⚠️  强制设置FFMPEG_BINARY为: /usr/bin/ffmpeg")
+
+
+# 调用设置函数
+setup_ffmpeg()
 
 class SubClippedVideoClip:
     def __init__(self, file_path, start_time=None, end_time=None, width=None, height=None, duration=None):
@@ -113,7 +162,6 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
 
     return ""
 
-
 def combine_videos(
     combined_video_path: str,
     video_paths: List[str],
@@ -123,6 +171,7 @@ def combine_videos(
     video_transition_mode: VideoTransitionMode = None,
     max_clip_duration: int = 5,
     threads: int = 2,
+    crop_mode: VideoCropMode = VideoCropMode.fit # 新增参数
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     audio_duration = audio_clip.duration
@@ -172,26 +221,135 @@ def combine_videos(
             clip = VideoFileClip(subclipped_item.file_path).subclipped(subclipped_item.start_time, subclipped_item.end_time)
             clip_duration = clip.duration
             # Not all videos are same size, so we need to resize them
+            # 修改后的代码
             clip_w, clip_h = clip.size
             if clip_w != video_width or clip_h != video_height:
                 clip_ratio = clip.w / clip.h
                 video_ratio = video_width / video_height
-                logger.debug(f"resizing clip, source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, target: {video_width}x{video_height}, ratio: {video_ratio:.2f}")
-                
-                if clip_ratio == video_ratio:
-                    clip = clip.resized(new_size=(video_width, video_height))
-                else:
-                    if clip_ratio > video_ratio:
-                        scale_factor = video_width / clip_w
-                    else:
-                        scale_factor = video_height / clip_h
+                logger.debug(
+                    f"resizing clip, source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, "
+                    f"target: {video_width}x{video_height}, ratio: {video_ratio:.2f}, "
+                    f"crop_mode: {crop_mode.value}"
+                )
 
+                # 根据不同裁剪模式处理
+                if crop_mode.value == VideoCropMode.fill.value:
+                    # 填充模式 - 缩放以填充整个画面，不保持比例，会变形
+                    # 这是最简单但可能导致变形的填充
+                    clip = clip.resized(newsize=(video_width, video_height))
+
+                elif crop_mode.value == VideoCropMode.fit.value:
+                    # 适应模式 - 添加黑边，保持比例
+                    if clip_ratio == video_ratio:
+                        clip = clip.resized(newsize=(video_width, video_height))
+                    else:
+                        if clip_ratio > video_ratio:
+                            # 原视频更宽，以宽度为基准缩放
+                            scale_factor = video_width / clip_w
+                        else:
+                            # 原视频更高，以高度为基准缩放
+                            scale_factor = video_height / clip_h
+
+                        new_width = int(clip_w * scale_factor)
+                        new_height = int(clip_h * scale_factor)
+
+                        # 创建黑色背景
+                        background = ColorClip(
+                            size=(video_width, video_height),
+                            color=(0, 0, 0)
+                        ).with_duration(clip_duration)
+
+                        # 将缩放后的视频放在背景中心
+                        clip_resized = clip.resized(newsize=(new_width, new_height)).with_position("center")
+                        clip = CompositeVideoClip([background, clip_resized])
+
+                elif crop_mode.value == VideoCropMode.smart.value:
+                    # 智能裁剪 - 居中裁剪，保持比例，无黑边
+                    # 这是 FFmpeg 代码中使用的方式
+                    if clip_ratio > video_ratio:
+                        # 原视频更宽，需要裁剪左右
+                        # 先缩放到目标高度
+                        scale_factor = video_height / clip_h
+                        new_width = int(clip_w * scale_factor)
+                        new_height = video_height
+
+                        # 缩放视频
+                        clip = clip.resized(height=video_height)
+
+                        # 计算裁剪位置
+                        x_center = clip.w // 2
+                        x_start = x_center - (video_width // 2)
+                        x_end = x_start + video_width
+
+                        # 确保裁剪范围不越界
+                        if x_start < 0:
+                            x_start = 0
+                            x_end = video_width
+                        elif x_end > clip.w:
+                            x_end = clip.w
+                            x_start = clip.w - video_width
+
+                        # 裁剪
+                        clip = clip.cropped(x1=x_start, x2=x_end, y1=0, y2=video_height)
+
+                    elif clip_ratio < video_ratio:
+                        # 原视频更高，需要裁剪上下
+                        # 先缩放到目标宽度
+                        scale_factor = video_width / clip_w
+                        new_width = video_width
+                        new_height = int(clip_h * scale_factor)
+
+                        # 缩放视频
+                        clip = clip.resized(width=video_width)
+
+                        # 计算裁剪位置
+                        y_center = clip.h // 2
+                        y_start = y_center - (video_height // 2)
+                        y_end = y_start + video_height
+
+                        # 确保裁剪范围不越界
+                        if y_start < 0:
+                            y_start = 0
+                            y_end = video_height
+                        elif y_end > clip.h:
+                            y_end = clip.h
+                            y_start = clip.h - video_height
+
+                        # 裁剪
+                        clip = clip.cropped(x1=0, x2=video_width, y1=y_start, y2=y_end)
+                    else:
+                        # 比例相同，直接缩放
+                        clip = clip.resized(newsize=(video_width, video_height))
+
+                elif crop_mode.value == VideoCropMode.zoom.value:
+                    # 缩放裁剪 - 先缩放再裁剪中心
+                    # 这是另一种常见的居中裁剪方式
+                    if clip_ratio > video_ratio:
+                        # 缩放以填满高度
+                        scale_factor = video_height / clip_h
+                    else:
+                        # 缩放以填满宽度
+                        scale_factor = video_width / clip_w
+
+                    # 缩放视频
                     new_width = int(clip_w * scale_factor)
                     new_height = int(clip_h * scale_factor)
+                    clip = clip.resized(newsize=(new_width, new_height))
 
-                    background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
-                    clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
-                    clip = CompositeVideoClip([background, clip_resized])
+                    # 居中裁剪
+                    x_center = new_width // 2
+                    y_center = new_height // 2
+                    x_start = x_center - (video_width // 2)
+                    y_start = y_center - (video_height // 2)
+                    x_end = x_start + video_width
+                    y_end = y_start + video_height
+
+                    # 裁剪
+                    clip = clip.cropped(x1=x_start, x2=x_end, y1=y_start, y2=y_end)
+
+                else:  # VideoCropMode.none
+                    # 不处理，保持原始
+                    pass
                     
             shuffle_side = random.choice(["left", "right", "top", "bottom"])
             if video_transition_mode.value == VideoTransitionMode.none.value:

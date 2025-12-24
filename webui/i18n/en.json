@@ -117,6 +117,12 @@
     "Pixabay API Key added successfully": "Pixabay API Key added successfully",
     "Select Pixabay API Key to delete": "Select Pixabay API Key to delete",
     "Delete Selected Pixabay API Key": "Delete Selected Pixabay API Key",
-    "Pixabay API Key deleted successfully": "Pixabay API Key deleted successfully"
+    "Pixabay API Key deleted successfully": "Pixabay API Key deleted successfully",
+    "Enable Smart Crop for 9:16 (remove black bars)": "Enable Smart Crop for 9:16 (remove black bars)",
+    "Video Crop Mode": "Video Crop Mode",
+    "Fit (keep all content, may have black bars)": "Fit (keep all content, may have black bars)",
+    "Fill (zoom and fill, no black bars)": "Fill (zoom and fill, no black bars)",
+    "Smart Crop (crop center, no black bars)": "Smart Crop (crop center, no black bars)",
+    "Zoom Crop (zoom and crop center)": "Zoom Crop (zoom and crop center)"
   }
 }

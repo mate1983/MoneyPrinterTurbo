@@ -117,6 +117,12 @@
     "Pixabay API Key added successfully": "Pixabay API Key 添加成功",
     "Select Pixabay API Key to delete": "选择要删除的 Pixabay API Key",
     "Delete Selected Pixabay API Key": "删除选定的 Pixabay API Key",
-    "Pixabay API Key deleted successfully": "Pixabay API Key 删除成功"
+    "Pixabay API Key deleted successfully": "Pixabay API Key 删除成功",
+    "Enable Smart Crop for 9:16 (remove black bars)": "启用9:16智能裁剪（移除黑边）",
+    "Video Crop Mode": "视频裁剪模式",
+    "Fit (keep all content, may have black bars)": "适应（保留所有内容，可能有黑边）",
+    "Fill (zoom and fill, no black bars)": "填充（缩放填充，无黑边）",
+    "Smart Crop (crop center, no black bars)": "智能裁剪（裁剪中心，无黑边）",
+    "Zoom Crop (zoom and crop center)": "缩放裁剪（缩放后裁剪中心）"
   }
 }

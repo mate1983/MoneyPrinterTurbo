@@ -12,6 +12,13 @@ warnings.filterwarnings(
     message="Field name.*shadows an attribute in parent.*",
 )
 
+class VideoCropMode(str, Enum):
+    """视频裁剪模式"""
+    none = "none"  # 不裁剪，保持原始（目前的行为）❌ 这个值可能是 None
+    fit = "fit"  # 适应模式（可能添加黑边，目前的行为）
+    fill = "fill"  # 填充模式（可能裁剪）
+    smart = "smart"  # 智能裁剪
+    zoom = "zoom"  # 缩放裁剪
 
 class VideoConcatMode(str, Enum):
     random = "random"
@@ -104,7 +111,8 @@ class VideoParams(BaseModel):
     stroke_width: float = 1.5
     n_threads: Optional[int] = 2
     paragraph_number: Optional[int] = 1
-
+    # 添加裁剪模式参数
+    crop_mode: VideoCropMode = VideoCropMode.fit.value
 
 class SubtitleRequest(BaseModel):
     video_script: str

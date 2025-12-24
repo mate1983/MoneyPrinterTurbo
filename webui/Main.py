@@ -19,6 +19,7 @@ from app.models.schema import (
     MaterialInfo,
     VideoAspect,
     VideoConcatMode,
+    VideoCropMode,  # 新增：导入裁剪模式
     VideoParams,
     VideoTransitionMode,
 )
@@ -34,12 +35,11 @@ st.set_page_config(
     menu_items={
         "Report a bug": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
         "About": "# MoneyPrinterTurbo\nSimply provide a topic or keyword for a video, and it will "
-        "automatically generate the video copy, video materials, video subtitles, "
-        "and video background music before synthesizing a high-definition short "
-        "video.\n\nhttps://github.com/harry0703/MoneyPrinterTurbo",
+                 "automatically generate the video copy, video materials, video subtitles, "
+                 "and video background music before synthesizing a high-definition short "
+                 "video.\n\nhttps://github.com/harry0703/MoneyPrinterTurbo",
     },
 )
-
 
 streamlit_style = """
 <style>
@@ -56,7 +56,6 @@ song_dir = os.path.join(root_dir, "resource", "songs")
 i18n_dir = os.path.join(root_dir, "webui", "i18n")
 config_file = os.path.join(root_dir, "webui", ".streamlit", "webui.toml")
 system_locale = utils.get_system_locale()
-
 
 if "video_subject" not in st.session_state:
     st.session_state["video_subject"] = ""
@@ -174,11 +173,11 @@ def init_log():
         record["message"] = record["message"].replace(root_dir, ".")
 
         _format = (
-            "<green>{time:%Y-%m-%d %H:%M:%S}</> | "
-            + "<level>{level}</> | "
-            + '"{file.path}:{line}":<blue> {function}</> '
-            + "- <level>{message}</>"
-            + "\n"
+                "<green>{time:%Y-%m-%d %H:%M:%S}</> | "
+                + "<level>{level}</> | "
+                + '"{file.path}:{line}":<blue> {function}</> '
+                + "- <level>{message}</>"
+                + "\n"
         )
         return _format
 
@@ -459,10 +458,12 @@ if not config.app.get("hide_config", False):
                 api_key = ", ".join(api_keys)
                 return api_key
 
+
             def save_keys_to_config(cfg_key, value):
                 value = value.replace(" ", "")
                 if value:
                     config.app[cfg_key] = value.split(",")
+
 
             st.write(tr("Video Source Settings"))
 
@@ -515,7 +516,7 @@ with left_panel:
         params.video_language = video_languages[selected_index][1]
 
         if st.button(
-            tr("Generate Video Script and Keywords"), key="auto_generate_script"
+                tr("Generate Video Script and Keywords"), key="auto_generate_script"
         ):
             with st.spinner(tr("Generating Video Script and Keywords")):
                 script = llm.generate_script(
@@ -641,6 +642,37 @@ with middle_panel:
             options=[1, 2, 3, 4, 5],
             index=0,
         )
+
+        # 新增：9:16视频裁剪模式选项
+        if params.video_aspect == VideoAspect.portrait:
+            # 只有当选择9:16竖屏时才显示裁剪模式选项
+            video_crop_modes = [
+                (tr("Fit (keep all content, may have black bars)"), VideoCropMode.fit.value),
+                (tr("Fill (zoom and fill, no black bars)"), VideoCropMode.fill.value),
+                (tr("Smart Crop (crop center, no black bars)"), VideoCropMode.smart.value),
+                (tr("Zoom Crop (zoom and crop center)"), VideoCropMode.zoom.value),
+            ]
+
+            # 获取保存的裁剪模式
+            saved_crop_mode = config.ui.get("crop_mode", VideoCropMode.fit.value)
+            saved_crop_mode_index = 0
+            for i, (_, mode_value) in enumerate(video_crop_modes):
+                if mode_value == saved_crop_mode:
+                    saved_crop_mode_index = i
+                    break
+
+            selected_index = st.selectbox(
+                tr("Video Crop Mode (9:16 only)"),
+                options=range(len(video_crop_modes)),
+                format_func=lambda x: video_crop_modes[x][0],
+                index=saved_crop_mode_index,
+            )
+            params.crop_mode = VideoCropMode(video_crop_modes[selected_index][1])
+            config.ui["crop_mode"] = params.crop_mode.value
+        else:
+            # 非9:16模式，使用默认的fit模式
+            params.crop_mode = VideoCropMode.fit
+
     with st.container(border=True):
         st.write(tr("Audio Settings"))
 
@@ -778,7 +810,7 @@ with middle_panel:
 
         # 当选择V2版本或者声音是V2声音时，显示服务区域和API key输入框
         if selected_tts_server == "azure-tts-v2" or (
-            voice_name and voice.is_azure_v2_voice(voice_name)
+                voice_name and voice.is_azure_v2_voice(voice_name)
         ):
             saved_azure_speech_region = config.azure.get("speech_region", "")
             saved_azure_speech_key = config.azure.get("speech_key", "")
@@ -798,7 +830,7 @@ with middle_panel:
 
         # 当选择硅基流动时，显示API key输入框和说明信息
         if selected_tts_server == "siliconflow" or (
-            voice_name and voice.is_siliconflow_voice(voice_name)
+                voice_name and voice.is_siliconflow_voice(voice_name)
         ):
             saved_siliconflow_api_key = config.siliconflow.get("api_key", "")
 
@@ -1029,12 +1061,14 @@ if start_button:
     log_container = st.empty()
     log_records = []
 
+
     def log_received(msg):
         if config.ui["hide_log"]:
             return
         with log_container:
             log_records.append(msg)
             st.code("\n".join(log_records))
+
 
     logger.add(log_received)
 
