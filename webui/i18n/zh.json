@@ -123,6 +123,11 @@
     "Fit (keep all content, may have black bars)": "适应（保留所有内容，可能有黑边）",
     "Fill (zoom and fill, no black bars)": "填充（缩放填充，无黑边）",
     "Smart Crop (crop center, no black bars)": "智能裁剪（裁剪中心，无黑边）",
-    "Zoom Crop (zoom and crop center)": "缩放裁剪（缩放后裁剪中心）"
+    "Zoom Crop (zoom and crop center)": "缩放裁剪（缩放后裁剪中心）",
+    "Video Render Mode": "视频生成模式",
+    "MoviePy (compatibility mode, slowest)": "MoviePy（兼容模式，速度最慢）",
+    "FFmpeg (quality priority, best quality)": "FFmpeg（质量优先，画质最佳）",
+    "FFmpeg (speed priority, fast encoding)": "FFmpeg（速度优先，编码更快）",
+    "FFmpeg (GPU accelerated, ultra fast)": "FFmpeg（GPU 加速，极速生成）"
   }
 }

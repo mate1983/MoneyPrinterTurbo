@@ -26,7 +26,7 @@ from app.models.schema import (
     VideoAspect,
     VideoConcatMode,
     VideoParams,
-    VideoTransitionMode, VideoCropMode,
+    VideoTransitionMode, VideoCropMode, VideoEncodePreset, VideoRenderEngine,
 )
 from app.services.utils import video_effects
 from app.utils import utils
@@ -161,23 +161,50 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
         return random.choice(files)
 
     return ""
+
+def get_ffmpeg_encode_args(preset: VideoEncodePreset) -> list[str]:
+    if preset == VideoEncodePreset.quality:
+        return [
+            "-c:v", "libx264",
+            "-crf", "18",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "high",
+            "-level", "4.1",
+        ]
+
+    if preset == VideoEncodePreset.speed:
+        return [
+            "-c:v", "libx264",
+            "-crf", "20",
+            "-preset", "superfast",
+            "-pix_fmt", "yuv420p",
+        ]
+
+    if preset == VideoEncodePreset.gpu:
+        return [
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",
+            "-rc", "vbr",
+            "-cq", "19",
+        ]
+
+    raise ValueError(f"Unknown preset: {preset}")
+
 def combine_videos(
     combined_video_path: str,
     video_paths: List[str],
     audio_file: str,
     video_aspect: VideoAspect = VideoAspect.portrait,
     video_concat_mode: VideoConcatMode = VideoConcatMode.random,
-    video_transition_mode: VideoTransitionMode = VideoTransitionMode.none,
     max_clip_duration: int = 5,
     threads: int = 2,
     crop_mode: VideoCropMode = VideoCropMode.fit,
+    render_engine: VideoRenderEngine = VideoRenderEngine.ffmpeg,
+    encode_preset: VideoEncodePreset = VideoEncodePreset.quality,
 ) -> str:
 
     os.makedirs(os.path.dirname(combined_video_path), exist_ok=True)
-
-    audio_clip = AudioFileClip(audio_file)
-    audio_duration = audio_clip.duration
-    audio_clip.close()
 
     aspect = VideoAspect(video_aspect)
     video_width, video_height = aspect.to_resolution()
@@ -186,70 +213,91 @@ def combine_videos(
     temp_dir = os.path.dirname(combined_video_path)
     temp_clips = []
 
-    # ---------- 1. 拆分 + 裁剪 ----------
-    for idx, video_path in enumerate(video_paths):
-        src = VideoFileClip(video_path)
-        t = 0
+    # ==========================================================
+    # ① MoviePy 模式（兼容 / 调试）
+    # ==========================================================
+    if render_engine == VideoRenderEngine.moviepy:
+        for idx, video_path in enumerate(video_paths):
+            src = VideoFileClip(video_path)
+            t = 0
 
-        while t + max_clip_duration <= src.duration:
-            clip = src.subclipped(t, t + max_clip_duration)
+            while t + max_clip_duration <= src.duration:
+                clip = src.subclipped(t, t + max_clip_duration)
+                cw, ch = clip.size
+                cr = cw / ch
 
-            # === 裁剪逻辑（100% 稳定顺序）===
-            cw, ch = clip.size
-            cr = cw / ch
+                if crop_mode == VideoCropMode.fill:
+                    clip = clip.resized((video_width, video_height))
 
-            if crop_mode == VideoCropMode.fill:
-                clip = clip.resized((video_width, video_height))
+                elif crop_mode == VideoCropMode.fit:
+                    scale = min(video_width / cw, video_height / ch)
+                    nw, nh = int(cw * scale), int(ch * scale)
+                    bg = ColorClip((video_width, video_height), (0, 0, 0)).with_duration(clip.duration)
+                    fg = clip.resized((nw, nh)).with_position("center")
+                    clip = CompositeVideoClip([bg, fg], size=(video_width, video_height))
 
-            elif crop_mode == VideoCropMode.fit:
-                scale = min(video_width / cw, video_height / ch)
-                nw, nh = int(cw * scale), int(ch * scale)
-                bg = ColorClip((video_width, video_height), (0, 0, 0)).with_duration(clip.duration)
-                fg = clip.resized((nw, nh)).with_position("center")
-                clip = CompositeVideoClip([bg, fg], size=(video_width, video_height))
+                elif crop_mode == VideoCropMode.smart:
+                    if cr > video_ratio:
+                        clip = clip.resized(height=video_height)
+                        x = (clip.w - video_width) // 2
+                        clip = clip.cropped(x1=x, x2=x + video_width)
+                    else:
+                        clip = clip.resized(width=video_width)
+                        y = (clip.h - video_height) // 2
+                        clip = clip.cropped(y1=y, y2=y + video_height)
 
-            elif crop_mode == VideoCropMode.smart:
-                if cr > video_ratio:
-                    clip = clip.resized(height=video_height)
+                elif crop_mode == VideoCropMode.zoom:
+                    scale = max(video_width / cw, video_height / ch)
+                    clip = clip.resized((int(cw * scale), int(ch * scale)))
                     x = (clip.w - video_width) // 2
-                    clip = clip.cropped(x1=x, x2=x + video_width)
-                else:
-                    clip = clip.resized(width=video_width)
                     y = (clip.h - video_height) // 2
-                    clip = clip.cropped(y1=y, y2=y + video_height)
+                    clip = clip.cropped(x1=x, x2=x + video_width, y1=y, y2=y + video_height)
 
-            elif crop_mode == VideoCropMode.zoom:
-                scale = max(video_width / cw, video_height / ch)
-                clip = clip.resized((int(cw * scale), int(ch * scale)))
-                x = (clip.w - video_width) // 2
-                y = (clip.h - video_height) // 2
-                clip = clip.cropped(x1=x, x2=x + video_width, y1=y, y2=y + video_height)
+                clip = clip.with_fps(fps).with_duration(max_clip_duration)
 
-            # === 统一补齐元信息（关键）===
-            clip = clip.with_fps(fps).with_duration(max_clip_duration)
+                out = os.path.join(temp_dir, f"clip_{len(temp_clips)}.mp4")
+                clip.write_videofile(
+                    out,
+                    fps=fps,
+                    codec="libx264",
+                    audio=False,
+                    preset="veryfast",
+                    threads=threads,
+                    ffmpeg_params=["-pix_fmt", "yuv420p"],
+                    logger=None,
+                )
+                clip.close()
+                temp_clips.append(out)
+                t += max_clip_duration
 
-            out = os.path.join(temp_dir, f"clip_{len(temp_clips)}.mp4")
-            clip.write_videofile(
-                out,
-                fps=fps,
-                codec="libx264",
-                audio=False,
-                preset="medium",
-                threads=threads,
-                ffmpeg_params=["-pix_fmt", "yuv420p"],
-                logger=None,
-            )
+            src.close()
 
-            clip.close()
-            temp_clips.append(out)
-            t += max_clip_duration
+    # ==========================================================
+    # ② FFmpeg 极速模式（生产推荐）
+    # ==========================================================
+    else:
+        encode_args = get_ffmpeg_encode_args(encode_preset)
 
-        src.close()
+        for video_path in video_paths:
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-vf", f"scale={video_width}:{video_height}:force_original_aspect_ratio=decrease,"
+                       f"pad={video_width}:{video_height}:(ow-iw)/2:(oh-ih)/2",
+                "-t", str(max_clip_duration),
+                *encode_args,
+                "-an",
+                os.path.join(temp_dir, f"clip_{len(temp_clips)}.mp4"),
+            ]
+            subprocess.run(cmd, check=True)
+            temp_clips.append(cmd[-1])
 
     if not temp_clips:
         raise RuntimeError("没有生成任何视频片段")
 
-    # ---------- 2. ffmpeg concat（终极稳定） ----------
+    # ==========================================================
+    # ③ ffmpeg concat（统一）
+    # ==========================================================
     concat_txt = os.path.join(temp_dir, "concat.txt")
     with open(concat_txt, "w") as f:
         for p in temp_clips:
@@ -265,7 +313,6 @@ def combine_videos(
         merged_video
     ], check=True)
 
-    # ---------- 3. 合成音频 ----------
     subprocess.run([
         "ffmpeg", "-y",
         "-i", merged_video,
@@ -276,15 +323,15 @@ def combine_videos(
         combined_video_path
     ], check=True)
 
-    # ---------- 4. 清理 ----------
+    # ==========================================================
+    # ④ 清理
+    # ==========================================================
     for p in temp_clips:
         os.remove(p)
     os.remove(concat_txt)
     os.remove(merged_video)
 
     return combined_video_path
-
-
 
 def wrap_text(text, max_width, font="Arial", fontsize=60):
     # Create ImageFont

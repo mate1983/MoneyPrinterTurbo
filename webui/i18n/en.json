@@ -123,6 +123,11 @@
     "Fit (keep all content, may have black bars)": "Fit (keep all content, may have black bars)",
     "Fill (zoom and fill, no black bars)": "Fill (zoom and fill, no black bars)",
     "Smart Crop (crop center, no black bars)": "Smart Crop (crop center, no black bars)",
-    "Zoom Crop (zoom and crop center)": "Zoom Crop (zoom and crop center)"
+    "Zoom Crop (zoom and crop center)": "Zoom Crop (zoom and crop center)",
+    "Video Render Mode": "Video Render Mode",
+    "MoviePy (compatibility mode, slowest)": "MoviePy (compatibility mode, slowest)",
+    "FFmpeg (quality priority, best quality)": "FFmpeg (quality priority, best quality)",
+    "FFmpeg (speed priority, fast encoding)": "FFmpeg (speed priority, fast encoding)",
+    "FFmpeg (GPU accelerated, ultra fast)": "FFmpeg (GPU accelerated, ultra fast)"
   }
 }

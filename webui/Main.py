@@ -21,7 +21,7 @@ from app.models.schema import (
     VideoConcatMode,
     VideoCropMode,  # 新增：导入裁剪模式
     VideoParams,
-    VideoTransitionMode,
+    VideoTransitionMode, VideoRenderEngine, VideoEncodePreset,
 )
 from app.services import llm, voice
 from app.services import task as tm
@@ -672,6 +672,42 @@ with middle_panel:
         else:
             # 非9:16模式，使用默认的fit模式
             params.crop_mode = VideoCropMode.fit
+
+        # ===============================
+        # 视频生成模式（渲染 + 编码，拉平）
+        # ===============================
+        video_render_modes = [
+            (tr("MoviePy (Compatibility / Slow)"), "moviepy"),
+            (tr("FFmpeg - Quality Priority"), "ffmpeg:quality"),
+            (tr("FFmpeg - Speed Priority"), "ffmpeg:speed"),
+            (tr("FFmpeg - GPU Ultra Fast"), "ffmpeg:gpu"),
+        ]
+
+        saved_render_mode = config.ui.get("video_render_mode", "ffmpeg:quality")
+        saved_render_index = 0
+        for i, (_, v) in enumerate(video_render_modes):
+            if v == saved_render_mode:
+                saved_render_index = i
+                break
+
+        selected_index = st.selectbox(
+            tr("Video Render Mode"),
+            options=range(len(video_render_modes)),
+            format_func=lambda x: video_render_modes[x][0],
+            index=saved_render_index,
+        )
+
+        render_value = video_render_modes[selected_index][1]
+        config.ui["video_render_mode"] = render_value
+
+        # 拆解参数
+        if render_value == "moviepy":
+            params.render_engine = VideoRenderEngine.moviepy
+            params.encode_preset = VideoEncodePreset.quality
+        else:
+            params.render_engine = VideoRenderEngine.ffmpeg
+            _, preset = render_value.split(":")
+            params.encode_preset = VideoEncodePreset(preset)
 
     with st.container(border=True):
         st.write(tr("Audio Settings"))

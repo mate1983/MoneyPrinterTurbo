@@ -20,6 +20,16 @@ class VideoCropMode(str, Enum):
     smart = "smart"  # 智能裁剪
     zoom = "zoom"  # 缩放裁剪
 
+class VideoRenderEngine(str, Enum):
+    moviepy = "moviepy"
+    ffmpeg = "ffmpeg"
+
+
+class VideoEncodePreset(str, Enum):
+    quality = "quality"   # libx264 CRF 18
+    speed = "speed"       # libx264 CRF 20 superfast
+    gpu = "gpu"           # h264_nvenc
+
 class VideoConcatMode(str, Enum):
     random = "random"
     sequential = "sequential"
@@ -113,6 +123,8 @@ class VideoParams(BaseModel):
     paragraph_number: Optional[int] = 1
     # 添加裁剪模式参数
     crop_mode: VideoCropMode = VideoCropMode.fit.value
+    render_engine: VideoRenderEngine = VideoRenderEngine.moviepy
+    encode_preset: VideoEncodePreset = VideoEncodePreset.quality
 
 class SubtitleRequest(BaseModel):
     video_script: str
