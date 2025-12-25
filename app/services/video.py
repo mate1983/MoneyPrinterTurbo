@@ -190,146 +190,135 @@ def get_ffmpeg_encode_args(preset: VideoEncodePreset) -> list[str]:
         ]
 
     raise ValueError(f"Unknown preset: {preset}")
+def build_vf_filter(crop_mode: VideoCropMode, w: int, h: int) -> str:
+    """
+    构建 FFmpeg -vf 滤镜
+    """
+    if crop_mode == VideoCropMode.none:
+        return f"scale={w}:{h}"
+
+    if crop_mode == VideoCropMode.fit:
+        # 等比缩放 + 黑边
+        return (
+            f"scale=w={w}:h={h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"
+        )
+
+    if crop_mode == VideoCropMode.fill:
+        # 强制拉伸（可能变形）
+        return f"scale={w}:{h}"
+
+    if crop_mode == VideoCropMode.smart:
+        # 等比填满 + 居中裁剪
+        return (
+            f"scale=w={w}:h={h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h}"
+        )
+
+    if crop_mode == VideoCropMode.zoom:
+        # 先放大再裁（和 smart 类似，但语义区分）
+        return (
+            f"scale=w={w}:h={h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h}"
+        )
+
+    raise ValueError(f"Unknown crop mode: {crop_mode}")
+
 
 def combine_videos(
     combined_video_path: str,
     video_paths: List[str],
     audio_file: str,
-    video_aspect: VideoAspect = VideoAspect.portrait,
-    video_concat_mode: VideoConcatMode = VideoConcatMode.random,
+    video_aspect: VideoAspect | None = None,
+    video_width: int | None = None,
+    video_height: int | None = None,
     max_clip_duration: int = 5,
-    threads: int = 2,
     crop_mode: VideoCropMode = VideoCropMode.fit,
-    render_engine: VideoRenderEngine = VideoRenderEngine.ffmpeg,
-    encode_preset: VideoEncodePreset = VideoEncodePreset.quality,
-) -> str:
+    fps: int = 30,
+    video_transition_mode=None,  # ✅ 吃掉但暂不实现
+    **kwargs,                    # ✅ 防止将来再炸
+):
+    """
+    FFmpeg 极速拼接版本（兼容旧调用）
+    """
+
+    # ---------- 1. 解析分辨率 ----------
+    if video_aspect is not None:
+        aspect = VideoAspect(video_aspect)
+        video_width, video_height = aspect.to_resolution()
+
+    if not video_width or not video_height:
+        raise ValueError("video_width / video_height 未指定")
 
     os.makedirs(os.path.dirname(combined_video_path), exist_ok=True)
+    workdir = os.path.dirname(combined_video_path)
 
-    aspect = VideoAspect(video_aspect)
-    video_width, video_height = aspect.to_resolution()
-    video_ratio = video_width / video_height
-
-    temp_dir = os.path.dirname(combined_video_path)
+    vf = build_vf_filter(crop_mode, video_width, video_height)
     temp_clips = []
 
-    # ==========================================================
-    # ① MoviePy 模式（兼容 / 调试）
-    # ==========================================================
-    if render_engine == VideoRenderEngine.moviepy:
-        for idx, video_path in enumerate(video_paths):
-            src = VideoFileClip(video_path)
-            t = 0
+    # ---------- 2. 裁剪 + 统一规格 ----------
+    for i, src in enumerate(video_paths):
+        out = os.path.join(workdir, f"clip_{i}.mp4")
 
-            while t + max_clip_duration <= src.duration:
-                clip = src.subclipped(t, t + max_clip_duration)
-                cw, ch = clip.size
-                cr = cw / ch
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", src,
+            "-t", str(max_clip_duration),
+            "-vf", vf,
+            "-r", str(fps),
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            out,
+        ]
 
-                if crop_mode == VideoCropMode.fill:
-                    clip = clip.resized((video_width, video_height))
-
-                elif crop_mode == VideoCropMode.fit:
-                    scale = min(video_width / cw, video_height / ch)
-                    nw, nh = int(cw * scale), int(ch * scale)
-                    bg = ColorClip((video_width, video_height), (0, 0, 0)).with_duration(clip.duration)
-                    fg = clip.resized((nw, nh)).with_position("center")
-                    clip = CompositeVideoClip([bg, fg], size=(video_width, video_height))
-
-                elif crop_mode == VideoCropMode.smart:
-                    if cr > video_ratio:
-                        clip = clip.resized(height=video_height)
-                        x = (clip.w - video_width) // 2
-                        clip = clip.cropped(x1=x, x2=x + video_width)
-                    else:
-                        clip = clip.resized(width=video_width)
-                        y = (clip.h - video_height) // 2
-                        clip = clip.cropped(y1=y, y2=y + video_height)
-
-                elif crop_mode == VideoCropMode.zoom:
-                    scale = max(video_width / cw, video_height / ch)
-                    clip = clip.resized((int(cw * scale), int(ch * scale)))
-                    x = (clip.w - video_width) // 2
-                    y = (clip.h - video_height) // 2
-                    clip = clip.cropped(x1=x, x2=x + video_width, y1=y, y2=y + video_height)
-
-                clip = clip.with_fps(fps).with_duration(max_clip_duration)
-
-                out = os.path.join(temp_dir, f"clip_{len(temp_clips)}.mp4")
-                clip.write_videofile(
-                    out,
-                    fps=fps,
-                    codec="libx264",
-                    audio=False,
-                    preset="veryfast",
-                    threads=threads,
-                    ffmpeg_params=["-pix_fmt", "yuv420p"],
-                    logger=None,
-                )
-                clip.close()
-                temp_clips.append(out)
-                t += max_clip_duration
-
-            src.close()
-
-    # ==========================================================
-    # ② FFmpeg 极速模式（生产推荐）
-    # ==========================================================
-    else:
-        encode_args = get_ffmpeg_encode_args(encode_preset)
-
-        for video_path in video_paths:
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-vf", f"scale={video_width}:{video_height}:force_original_aspect_ratio=decrease,"
-                       f"pad={video_width}:{video_height}:(ow-iw)/2:(oh-ih)/2",
-                "-t", str(max_clip_duration),
-                *encode_args,
-                "-an",
-                os.path.join(temp_dir, f"clip_{len(temp_clips)}.mp4"),
-            ]
-            subprocess.run(cmd, check=True)
-            temp_clips.append(cmd[-1])
+        subprocess.run(cmd, check=True)
+        temp_clips.append(out)
 
     if not temp_clips:
-        raise RuntimeError("没有生成任何视频片段")
+        raise RuntimeError("未生成任何视频片段")
 
-    # ==========================================================
-    # ③ ffmpeg concat（统一）
-    # ==========================================================
-    concat_txt = os.path.join(temp_dir, "concat.txt")
-    with open(concat_txt, "w") as f:
+    # ---------- 3. concat ----------
+    concat_txt = os.path.join(workdir, "concat.txt")
+    with open(concat_txt, "w", encoding="utf-8") as f:
         for p in temp_clips:
             f.write(f"file '{os.path.abspath(p)}'\n")
 
-    merged_video = os.path.join(temp_dir, "merged.mp4")
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", concat_txt,
-        "-c", "copy",
-        merged_video
-    ], check=True)
+    merged = os.path.join(workdir, "merged.mp4")
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_txt,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            merged,
+        ],
+        check=True,
+    )
 
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-i", merged_video,
-        "-i", audio_file,
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        combined_video_path
-    ], check=True)
+    # ---------- 4. 合成音频 ----------
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", merged,
+            "-i", audio_file,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            combined_video_path,
+        ],
+        check=True,
+    )
 
-    # ==========================================================
-    # ④ 清理
-    # ==========================================================
+    # ---------- 5. 清理 ----------
     for p in temp_clips:
         os.remove(p)
     os.remove(concat_txt)
-    os.remove(merged_video)
+    os.remove(merged)
 
     return combined_video_path
 
