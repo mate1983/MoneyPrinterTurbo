@@ -662,7 +662,7 @@ with middle_panel:
                     break
 
             selected_index = st.selectbox(
-                tr("Video Crop Mode (9:16 only)"),
+                tr("Video Crop Mode"),
                 options=range(len(video_crop_modes)),
                 format_func=lambda x: video_crop_modes[x][0],
                 index=saved_crop_mode_index,
